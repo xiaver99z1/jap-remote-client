@@ -33,18 +33,20 @@ const ICE_SERVERS: RTCConfiguration = {
   ],
 };
 
-export default function RemoteScreen() {
+export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const candidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
   const [status, setStatus] = useState<string>("Disconnected");
-  const [statsText, setStatsText] = useState<string>("No video track yet");
+  const [statsText, setStatsText] = useState<string>("Waiting for stream...");
 
   useEffect(() => {
     const socket = io(SIGNALING_SERVER, {
       transports: ["polling", "websocket"],
       reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1500,
     });
     socketRef.current = socket;
 
@@ -64,37 +66,40 @@ export default function RemoteScreen() {
       };
 
       pc.ontrack = (event) => {
-        console.log("[Desktop] ontrack fired!", event);
         const videoEl = videoRef.current;
         if (!videoEl) return;
 
-        // Build stream directly from event.track in case event.streams[0] is empty
         const inboundStream =
           event.streams && event.streams[0]
             ? event.streams[0]
             : new MediaStream([event.track]);
 
         videoEl.srcObject = inboundStream;
-        videoEl.play().catch((err) => console.warn("Autoplay warning:", err));
-        setStatus("Track attached! Waiting for frames...");
+        videoEl.play().catch((err) => console.warn("Autoplay note:", err));
+        setStatus("Live: Streaming Remote Phone Screen!");
       };
 
       pc.onconnectionstatechange = () => {
         setStatus(`WebRTC State: ${pc.connectionState}`);
+        // If phone switched networks and connection failed, ask room to re-offer
+        if (pc.connectionState === "failed" && socket.connected) {
+          socket.emit("join-room", ROOM_ID);
+        }
       };
 
       pcRef.current = pc;
       return pc;
     };
 
-    // Poll WebRTC stats every second so you can see if bytes/frames are arriving
     const statsInterval = setInterval(async () => {
       if (!pcRef.current) return;
       const stats = await pcRef.current.getStats();
       stats.forEach((report) => {
         if (report.type === "inbound-rtp" && report.kind === "video") {
           setStatsText(
-            `Bytes Received: ${report.bytesReceived ?? 0} | Frames Decoded: ${report.framesDecoded ?? 0}`,
+            `Bytes Received: ${report.bytesReceived ?? 0} | Frames Decoded: ${
+              report.framesDecoded ?? 0
+            }`,
           );
         }
       });
@@ -107,14 +112,14 @@ export default function RemoteScreen() {
     });
 
     socket.on("offer", async (offer: RTCSessionDescriptionInit) => {
-      setStatus("Offer received! Sending answer...");
+      setStatus("Offer received from Phone! Connecting stream...");
+      candidateQueueRef.current = [];
       const pc = setupPeerConnection();
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
-      // Drain any ICE candidates that arrived early
       while (candidateQueueRef.current.length > 0) {
         const c = candidateQueueRef.current.shift()!;
-        await pc.addIceCandidate(new RTCIceCandidate(c));
+        await pc.addIceCandidate(new RTCIceCandidate(c)).catch(console.error);
       }
 
       const answer = await pc.createAnswer();
