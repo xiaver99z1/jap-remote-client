@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 
-const SIGNALING_SERVER = import.meta.env.VITE_SIGNALING_SERVER;
+const SIGNALING_SERVER =
+  import.meta.env.VITE_SIGNALING_SERVER || "https://jap-remote.onrender.com";
 const ROOM_ID = "remote-screen-room";
 
-const TURN_USERNAME = import.meta.env.VITE_TURN_USERNAME;
-const TURN_PASSWORD = import.meta.env.VITE_TURN_PASSWORD;
+const TURN_USERNAME =
+  import.meta.env.VITE_TURN_USERNAME || "f8c9b3659bc5b39d5cde1808";
+const TURN_PASSWORD =
+  import.meta.env.VITE_TURN_PASSWORD || "PASTE_YOUR_METERED_PASSWORD_HERE";
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
@@ -58,24 +61,6 @@ export default function App() {
     const socket = socketRef.current;
     if (!socket) return;
 
-    // If switching away from another phone, tell the previous phone to pause its stream
-    if (
-      selectedPhoneRef.current &&
-      selectedPhoneRef.current !== phone.socketId
-    ) {
-      socket.emit("stop-stream", {
-        targetSocketId: selectedPhoneRef.current,
-      });
-      if (pcRef.current) {
-        pcRef.current.close();
-        pcRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-      setIsStreaming(false);
-    }
-
     selectedPhoneRef.current = phone.socketId;
     setSelectedPhoneId(phone.socketId);
 
@@ -86,21 +71,13 @@ export default function App() {
     const isCellularAllowed =
       forceAllowCellular || approvedCellularRef.current.has(phone.socketId);
 
-    // AUTO-STREAM if on Wi-Fi; WAIT FOR BUTTON CLICK if on Mobile Data
-    if (phone.networkType === "wifi" || isCellularAllowed) {
-      setStatus(
-        `Requesting live stream from ${phone.deviceName} (${phone.networkType.toUpperCase()})...`,
-      );
-      socket.emit("request-stream", {
-        targetSocketId: phone.socketId,
-        allowCellular: isCellularAllowed,
-      });
-    } else {
-      setIsStreaming(false);
-      setStatus(
-        `${phone.deviceName} is on Mobile Data — Click "Connect Using Mobile Data" below to stream.`,
-      );
-    }
+    setStatus(
+      `Requesting live stream from ${phone.deviceName} (${phone.networkType.toUpperCase()})...`,
+    );
+    socket.emit("request-stream", {
+      targetSocketId: phone.socketId,
+      allowCellular: isCellularAllowed,
+    });
   };
 
   const pauseCurrentStream = () => {
@@ -199,7 +176,6 @@ export default function App() {
       socket.emit("join-room", { roomId: ROOM_ID, role: "viewer" });
     });
 
-    // Receive real-time list of connected phones & their network status (Wi-Fi vs Mobile Data)
     socket.on("devices-list", (phoneList: PhoneDevice[]) => {
       setDevices(phoneList);
 
@@ -211,31 +187,12 @@ export default function App() {
         return;
       }
 
-      // Auto-select the first phone if none is selected yet
       const currentId = selectedPhoneRef.current;
       const activePhone =
         phoneList.find((p) => p.socketId === currentId) || phoneList[0];
 
       if (!currentId || currentId !== activePhone.socketId) {
         selectDevice(activePhone, false);
-      } else {
-        // If already selected phone just switched to Wi-Fi, trigger auto-stream
-        if (activePhone.networkType === "wifi" && !pcRef.current) {
-          selectDevice(activePhone, false);
-        } else if (
-          activePhone.networkType === "cellular" &&
-          !approvedCellularRef.current.has(activePhone.socketId)
-        ) {
-          // Phone switched to Mobile Data mid-session without approval — pause viewer
-          if (pcRef.current) {
-            pcRef.current.close();
-            pcRef.current = null;
-          }
-          setIsStreaming(false);
-          setStatus(
-            `${activePhone.deviceName} switched to Mobile Data — Click "Connect Using Mobile Data" to resume.`,
-          );
-        }
       }
     });
 
@@ -249,7 +206,6 @@ export default function App() {
           payload.offer || (payload as unknown as RTCSessionDescriptionInit);
         const fromId = payload.fromSocketId || selectedPhoneRef.current || "";
 
-        // Only accept offers from the currently selected phone
         if (
           selectedPhoneRef.current &&
           fromId &&
@@ -320,7 +276,6 @@ export default function App() {
     >
       <h2 style={{ marginTop: 0 }}>Remote Screen Console</h2>
 
-      {/* Device Switcher Bar (Option B) */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 13, color: "#9ca3af", marginBottom: 8 }}>
           Connected Phones ({devices.length}):
@@ -370,7 +325,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Status & Stats */}
       <p style={{ color: "#4ade80", fontWeight: 600, marginBottom: 4 }}>
         Status: {status}
       </p>
@@ -378,7 +332,6 @@ export default function App() {
         {statsText}
       </p>
 
-      {/* Action Controls for Mobile Data / Stream Management */}
       {selectedPhone && (
         <div
           style={{
@@ -493,7 +446,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Video Player */}
       <div
         style={{
           border: "1px solid #333",
