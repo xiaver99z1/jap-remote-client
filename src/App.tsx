@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 
 const SIGNALING_SERVER = import.meta.env.VITE_SIGNALING_SERVER;
