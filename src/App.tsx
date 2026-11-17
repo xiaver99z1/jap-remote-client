@@ -8,10 +8,12 @@ const ROOM_ID = "remote-screen-room";
 const TURN_USERNAME =
   import.meta.env.VITE_TURN_USERNAME || "f8c9b3659bc5b39d5cde1808";
 const TURN_PASSWORD =
-  import.meta.env.VITE_TURN_PASSWORD || "PASTE_YOUR_METERED_PASSWORD_HERE";
+  import.meta.env.VITE_TURN_PASSWORD ||
+  "PASTE_YOUR_ACTUAL_METERED_PASSWORD_HERE";
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun.relay.metered.ca:80" },
     {
       urls: "turn:global.relay.metered.ca:80",
@@ -137,16 +139,20 @@ export default function App() {
 
         videoEl.srcObject = inboundStream;
         videoEl.play().catch((err) => console.warn("Autoplay note:", err));
-        setIsStreaming(true);
-        setStatus("Live: Streaming Remote Phone Screen!");
       };
 
-      pc.onconnectionstatechange = () => {
-        setStatus(`WebRTC State: ${pc.connectionState}`);
+      pc.oniceconnectionstatechange = () => {
+        setStatus(`ICE State: ${pc.iceConnectionState}`);
         if (
-          pc.connectionState === "disconnected" ||
-          pc.connectionState === "closed" ||
-          pc.connectionState === "failed"
+          pc.iceConnectionState === "connected" ||
+          pc.iceConnectionState === "completed"
+        ) {
+          setIsStreaming(true);
+          setStatus("Live: Streaming Remote Phone Screen!");
+        } else if (
+          pc.iceConnectionState === "disconnected" ||
+          pc.iceConnectionState === "failed" ||
+          pc.iceConnectionState === "closed"
         ) {
           setIsStreaming(false);
         }
@@ -162,11 +168,12 @@ export default function App() {
       stats.forEach((report) => {
         if (report.type === "inbound-rtp" && report.kind === "video") {
           const mb = ((report.bytesReceived ?? 0) / (1024 * 1024)).toFixed(2);
-          setStatsText(
-            `Data Received: ${mb} MB | Frames Decoded: ${
-              report.framesDecoded ?? 0
-            }`,
-          );
+          const frames = report.framesDecoded ?? 0;
+          if (frames > 0) {
+            setIsStreaming(true);
+            setStatus("Live: Streaming Remote Phone Screen!");
+          }
+          setStatsText(`Data Received: ${mb} MB | Frames Decoded: ${frames}`);
         }
       });
     }, 1000);
@@ -214,7 +221,7 @@ export default function App() {
           return;
         }
 
-        setStatus("Offer received from Phone! Connecting stream...");
+        setStatus("Offer received from Phone! Negotiating ICE...");
         candidateQueueRef.current = [];
         const pc = setupPeerConnection(fromId);
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
@@ -226,10 +233,26 @@ export default function App() {
 
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
+
+        // Wait up to 1s so Desktop STUN/TURN candidates are embedded directly inside the SDP Answer
+        await new Promise<void>((resolve) => {
+          if (pc.iceGatheringState === "complete") {
+            resolve();
+            return;
+          }
+          const timer = setTimeout(resolve, 1000);
+          pc.onicegatheringstatechange = () => {
+            if (pc.iceGatheringState === "complete") {
+              clearTimeout(timer);
+              resolve();
+            }
+          };
+        });
+
         socket.emit("answer", {
           roomId: ROOM_ID,
           targetSocketId: fromId,
-          answer,
+          answer: pc.localDescription || answer,
         });
       },
     );
