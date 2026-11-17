@@ -63,6 +63,23 @@ export default function App() {
     const socket = socketRef.current;
     if (!socket) return;
 
+    if (
+      selectedPhoneRef.current &&
+      selectedPhoneRef.current !== phone.socketId
+    ) {
+      socket.emit("stop-stream", {
+        targetSocketId: selectedPhoneRef.current,
+      });
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      setIsStreaming(false);
+    }
+
     selectedPhoneRef.current = phone.socketId;
     setSelectedPhoneId(phone.socketId);
 
@@ -73,13 +90,20 @@ export default function App() {
     const isCellularAllowed =
       forceAllowCellular || approvedCellularRef.current.has(phone.socketId);
 
-    setStatus(
-      `Requesting live stream from ${phone.deviceName} (${phone.networkType.toUpperCase()})...`,
-    );
-    socket.emit("request-stream", {
-      targetSocketId: phone.socketId,
-      allowCellular: isCellularAllowed,
-    });
+    if (phone.networkType === "wifi" || isCellularAllowed) {
+      setStatus(
+        `Requesting live stream from ${phone.deviceName} (${phone.networkType.toUpperCase()})...`,
+      );
+      socket.emit("request-stream", {
+        targetSocketId: phone.socketId,
+        allowCellular: isCellularAllowed,
+      });
+    } else {
+      setIsStreaming(false);
+      setStatus(
+        `${phone.deviceName} is on Mobile Data — Click "Connect Stream (Mobile Data)" below.`,
+      );
+    }
   };
 
   const pauseCurrentStream = () => {
@@ -231,28 +255,14 @@ export default function App() {
           await pc.addIceCandidate(new RTCIceCandidate(c)).catch(console.error);
         }
 
+        // Pure Trickle ICE: Send Answer immediately without artificial delay
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-
-        // Wait up to 1s so Desktop STUN/TURN candidates are embedded directly inside the SDP Answer
-        await new Promise<void>((resolve) => {
-          if (pc.iceGatheringState === "complete") {
-            resolve();
-            return;
-          }
-          const timer = setTimeout(resolve, 1000);
-          pc.onicegatheringstatechange = () => {
-            if (pc.iceGatheringState === "complete") {
-              clearTimeout(timer);
-              resolve();
-            }
-          };
-        });
 
         socket.emit("answer", {
           roomId: ROOM_ID,
           targetSocketId: fromId,
-          answer: pc.localDescription || answer,
+          answer,
         });
       },
     );
